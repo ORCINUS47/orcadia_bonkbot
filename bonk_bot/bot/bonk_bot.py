@@ -159,7 +159,7 @@ class BonkBot(BotEventHandler):
         :param link: link to join game.
         """
 
-        return Game(
+        game = Game(
             self,
             None,
             "",
@@ -170,6 +170,8 @@ class BonkBot(BotEventHandler):
             False,
             game_join_params=[link, password]
         )
+        await game.connect()
+        return game
 
     async def create_game(
         self,
@@ -212,7 +214,7 @@ class BonkBot(BotEventHandler):
         elif not (server in all_servers_list):
             raise TypeError("Server param is not a server")
 
-        return Game(
+        game = Game(
             self,
             server,
             name,
@@ -223,6 +225,8 @@ class BonkBot(BotEventHandler):
             False,
             game_create_params=[name, max_players, unlisted, password, min_level, max_level, server]
         )
+        await game.connect()
+        return game
 
     async def fetch_online(self) -> BonkOnline:
         """Returns current bonk online players."""
