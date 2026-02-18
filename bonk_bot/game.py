@@ -86,7 +86,7 @@ class Game:
         )
         self.requested_maps: List[MapRequestHost] = []
         self.join_link = ""
-        self._socket_client = socketio.AsyncClient(ssl_verify=False)
+        self._socket_client = socketio.AsyncClient(ssl_verify=True)
         self.__is_created_by_bot: bool = is_created_by_bot
         self.__is_joined_from_link: bool = is_joined_from_link
         self.__is_joined_from_friend_list: bool = is_joined_from_friend_list
@@ -94,7 +94,8 @@ class Game:
         self.__game_join_params: Union[list, None] = game_join_params
         self.__is_connected = False
 
-        asyncio.run(self.__connect())
+        # Connection is established explicitly via `await game.connect()` by the caller.
+        self._keepalive_task: Union[asyncio.Task, None] = None
 
     @property
     def bot(self) -> "Union[BonkBot, GuestBonkBot, AccountBonkBot]":
@@ -143,6 +144,16 @@ class Game:
     @property
     def socket_client(self) -> socketio.AsyncClient:
         return self._socket_client
+
+    async def connect(self) -> None:
+        """Establish connection with the game.
+
+        This library is async-first; do not call asyncio.run() inside the class.
+        The caller should `await game.connect()`.
+        """
+        if self.__is_connected or self.socket_client.connected:
+            return
+        await self.__connect()
 
     async def __connect(self) -> None:
         """Method that establishes connection with game."""
@@ -440,6 +451,10 @@ class Game:
     async def leave(self) -> None:
         """Disconnect from the game."""
 
+        if self._keepalive_task is not None and not self._keepalive_task.done():
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
+
         await self.socket_client.disconnect()
 
         self.__is_connected = False
@@ -566,7 +581,6 @@ class Game:
         await self.__socket_events()
 
         await self.socket_client.connect(socket_address)
-        await self.__keep_alive()
 
     async def __join_from_friend_list(self, room_id: int, password="") -> None:
         """
@@ -625,7 +639,6 @@ class Game:
         await self.__socket_events()
 
         await self.socket_client.connect(f"https://{room_data['server']}.bonk.io/socket.io")
-        await self.__keep_alive()
 
     async def __join_from_room_link(self, link: str, password="") -> None:
         """
@@ -681,8 +694,7 @@ class Game:
             await self.__socket_events()
 
             await self.socket_client.connect(f"https://{room_data[2]}.bonk.io/socket.io")
-            await self.__keep_alive()
-        except IndexError:
+            except IndexError:
             self.bot.event_emitter.emit(
                 "error",
                 GameConnectionError("Room is not found", self)
@@ -746,14 +758,13 @@ class Game:
         await self.__socket_events()
 
         await self.socket_client.connect(f"https://{room_data['server']}.bonk.io/socket.io")
-        await self.__keep_alive()
 
     async def __keep_alive(self) -> None:
         """Sends timesync packet every 5 seconds to prevent bonk server from kicking bot."""
 
         ping_id = 1
 
-        while self.__is_connected:
+        while self.__is_connected and self.socket_client.connected:
             await self.socket_client.emit(
                 18,
                 {
@@ -830,6 +841,8 @@ class Game:
                     self._teams = True
 
             self.__is_connected = True
+            if self._keepalive_task is None or self._keepalive_task.done():
+                self._keepalive_task = asyncio.create_task(self.__keep_alive())
             self.bot.event_emitter.emit("game_connect", self)
 
         @self.socket_client.on(4)
@@ -1181,6 +1194,8 @@ class Game:
         async def on_join_link_receive(join_link_number: int, bypass: str) -> None:
             self.join_link = f"https://bonk.io/{join_link_number:06}{bypass}"
             self.__is_connected = True
+            if self._keepalive_task is None or self._keepalive_task.done():
+                self._keepalive_task = asyncio.create_task(self.__keep_alive())
             self.bot.event_emitter.emit("game_connect", self)
 
         @self.socket_client.on(52)
